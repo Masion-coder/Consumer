@@ -18,7 +18,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class Consumer implements Runnable {
     private int m_n;
     private BlockingQueue<Message> m_buffer;
-    private int m_port = 40000;
+    private String m_name;
+    public void setName(String name) {
+        m_name = name;
+    }
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     class Task implements Runnable {
@@ -32,68 +36,74 @@ public class Consumer implements Runnable {
             try (Socket s = new Socket("127.0.0.1", m_port);
                     BufferedReader br = new BufferedReader(new InputStreamReader(s.getInputStream(), "UTF-16LE"));
                     BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(s.getOutputStream(), "UTF-16LE"))) {
-                // s.setSoTimeout(2000);
-                bw.write(MAPPER.writeValueAsString(new Object() {
-                    @SuppressWarnings("unused")
-                    public String name = "consumer";
-                    public List<String> tags = new LinkedList<>();
-                    {
-                        tags.add("number");
-                    }
-                }));
-                bw.flush();
+                {
+                    String str = MAPPER.writeValueAsString(new Object() {
+                        @SuppressWarnings("unused")
+                        public String name = m_name;
+                        public List<String> tags = new LinkedList<>();
+                        {
+                            tags.add("number");
+                        }
+                    });
+                    bw.write(str);
+                    bw.flush();
 
-                System.out.println(MAPPER.writeValueAsString(new Object() {
-                    @SuppressWarnings("unused")
-                    public String name = "consumer";
-                    public List<String> tags = new LinkedList<>();
-                    {
-                        tags.add("number");
-                    }
-                }));
+                    System.out.println(str);
+                }
 
                 String json = "";
-                while (!s.isClosed()) {
+
+                int m = 0;
+                while (m_n - m > 0 && !s.isClosed()) {
 
                     char[] buff = new char[4096];
-                    // System.out.println("开始接收素数");
 
                     do {
                         int len = br.read(buff);
                         if (len == -1)
                             continue;
                         json += String.copyValueOf(buff).substring(0, len);
-                        if (json.length() > 1000000) break;
+                        if (json.length() > 10000)
+                            break;
                         Thread.sleep(10);
                     } while (br.ready());
 
-                    // System.out.println("已接收素数");
-
-                    // System.out.println("json:" + json);
-
-                    if (json == "") {
+                    if (json.replaceAll(" ", "").equals("")) {
                         Thread.sleep(1000);
                         continue;
                     }
 
-                    // System.out.println('[' + json.substring(0, json.lastIndexOf("},{") + 1) + ']');
+                    List<Message> messages = new LinkedList<>();
 
-                    List<Message> messages = (MAPPER.readValue('[' + json.substring(0, json.lastIndexOf("},{") + 1) + ']', new TypeReference<List<Message>>() {
-                    }));
+                    if (json.lastIndexOf("},{") != -1) {
+                        messages.addAll(MAPPER.readValue('[' + json.substring(0, json.lastIndexOf("},{") + 1) + ']',
+                                new TypeReference<List<Message>>() {
+                                }));
 
-                    json = json.substring(json.lastIndexOf("},{") + 2);
+                        json = json.substring(json.lastIndexOf("},{") + 2);
+                    }
 
-                    // System.out.println("size:" + messages.size());
+                    if (!br.ready() && !json.equals("")) {
+                        messages.addAll((MAPPER.readValue('[' + json.substring(0, json.lastIndexOf(",")) + ']',
+                                new TypeReference<List<Message>>() {
+                                })));
+                        json = "";
+                    }
+
+                    m += messages.size();
 
                     for (Message message : messages) {
                         m_buffer.add(message);
                     }
+
                 }
+                s.close();
+                System.out.println("取消订阅");
             } catch (UnknownHostException e) {
                 System.out.println("ERROE(Consumer):" + e.getMessage());
-            } catch (IOException e) {
+            } catch (InterruptedException e) {
                 System.out.println("ERROE(Consumer):" + e.getMessage());
-            } catch (Exception e) {
+            } catch (IOException e) {
                 System.out.println("ERROE(Consumer):" + e.getMessage());
             }
         }
@@ -106,21 +116,23 @@ public class Consumer implements Runnable {
 
     @Override
     public void run() {
-        new Thread(new Task()).start();
-        int n = m_n;
-        while (m_n > 0) {
+        Thread thread = new Thread(new Task());
+        thread.start();
+        int m = 0;
+        int cnt = 0;
+        while (m_n - m > 0) {
             try {
                 isPrime(m_buffer.take().value.num);
-                --m_n;
+                m++;
             } catch (InterruptedException e) {
                 System.out.println("ERROE:" + e.getMessage());
             }
-            if (n - m_n >= 1000) {
-                System.out.println("run:" + m_n + ",buffer:" + m_buffer.size());
-                n = m_n;
+            if (m - cnt >= 1000) {
+                System.out.println(m_name + "剩余:" + (m_n - m) + ",buffer:" + m_buffer.size());
+                cnt = m;
             }
         }
-        System.out.println("run:" + m_n);
+        System.out.println("finsh");
 
     }
 
